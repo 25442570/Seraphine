@@ -19,23 +19,30 @@ class CustomRotatingFileHandler(RotatingFileHandler):
         """
         Do a rollover, as described in __init__().
         """
-        if self.stream:
-            self.stream.close()
-            self.stream = None
-        if self.backupCount > 0:
-            for i in range(self.backupCount - 1, 0, -1):
-                sfn = self._get_new_file_name(i)
-                dfn = self._get_new_file_name(i + 1)
-                if os.path.exists(sfn):
-                    if os.path.exists(dfn):
-                        os.remove(dfn)
-                    os.rename(sfn, dfn)
-            dfn = self._get_new_file_name(1)
-            if os.path.exists(dfn):
-                os.remove(dfn)
-            os.rename(self.baseFilename, dfn)
-        if not self.delay:
-            self.stream = self._open()
+        try:
+            if self.stream:
+                self.stream.close()
+                self.stream = None
+            if self.backupCount > 0:
+                for i in range(self.backupCount - 1, 0, -1):
+                    sfn = self._get_new_file_name(i)
+                    dfn = self._get_new_file_name(i + 1)
+                    if os.path.exists(sfn):
+                        if os.path.exists(dfn):
+                            os.remove(dfn)
+                        os.rename(sfn, dfn)
+                dfn = self._get_new_file_name(1)
+                if os.path.exists(dfn):
+                    os.remove(dfn)
+                os.rename(self.baseFilename, dfn)
+            if not self.delay:
+                self.stream = self._open()
+        except (OSError, IOError, PermissionError):
+            # 文件系统可能不可用（如系统关机时），静默失败
+            pass
+        except Exception:
+            # 其他异常也静默处理
+            pass
 
     def _get_new_file_name(self, index):
         """
@@ -79,7 +86,14 @@ class Logger:
     def log(self, level, message, tag=None):
         # FIXME if tag is none an exception will be thrown
         extra = {'TAG': tag} if tag else {}
-        self.logger.log(level, message, extra=extra)
+        try:
+            self.logger.log(level, message, extra=extra)
+        except (OSError, IOError, PermissionError):
+            # 文件系统可能不可用（如系统关机时），静默失败
+            pass
+        except Exception:
+            # 其他异常也静默处理，避免在关机时崩溃
+            pass
 
     def debug(self, message, tag=None):
         self.log(logging.DEBUG, message, tag)

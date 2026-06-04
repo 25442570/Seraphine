@@ -140,17 +140,23 @@ def getLolClientPidSlowly():
 
 
 def getLolClientPid(path):
-    processes = subprocess.check_output(
-        f'{path} /FI "imagename eq LeagueClientUx.exe" /NH', shell=True)
+    try:
+        processes = subprocess.check_output(
+            f'{path} /FI "imagename eq LeagueClientUx.exe" /NH', shell=True)
 
-    if b'LeagueClientUx.exe' in processes:
-        arr = processes.split()
-        try:
-            pos = arr.index(b"LeagueClientUx.exe")
-            return int(arr[pos + 1])
-        except ValueError:
-            raise ValueError(f"Subprocess return exception: {processes}")
-    else:
+        if b'LeagueClientUx.exe' in processes:
+            arr = processes.split()
+            try:
+                pos = arr.index(b"LeagueClientUx.exe")
+                return int(arr[pos + 1])
+            except ValueError:
+                raise ValueError(f"Subprocess return exception: {processes}")
+        else:
+            return 0
+    except (subprocess.CalledProcessError, OSError, IOError, PermissionError):
+        # 系统可能正在关闭，静默返回
+        return 0
+    except Exception:
         return 0
 
 
@@ -167,6 +173,11 @@ def getLolClientPids(path):
             f'original output: {e.output.decode()}'
         )
         raise e
+    except (OSError, IOError, PermissionError):
+        # 系统可能正在关闭，返回空列表
+        return []
+    except Exception:
+        return []
 
     pids = []
 
@@ -193,10 +204,16 @@ def getLolClientPidsSlowly():
 
 
 def isLolGameProcessExist(path):
-    processes = subprocess.check_output(
-        f'{path} /FI "imagename eq League of Legends.exe" /NH', shell=True)
+    try:
+        processes = subprocess.check_output(
+            f'{path} /FI "imagename eq League of Legends.exe" /NH', shell=True)
 
-    return b'League of Legends.exe' in processes
+        return b'League of Legends.exe' in processes
+    except (subprocess.CalledProcessError, OSError, IOError, PermissionError):
+        # 系统可能正在关闭，返回 False
+        return False
+    except Exception:
+        return False
 
 
 def getPortTokenServerByPidViaPsutil(pid):

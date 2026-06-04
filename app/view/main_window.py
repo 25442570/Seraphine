@@ -711,34 +711,89 @@ class MainWindow(FluentWindow):
         self.auxiliaryFuncInterface.setEnabled(False)
 
     def __terminateListeners(self):
-        self.processListener.terminate()
-        self.checkUpdateThread.terminate()
-        self.checkNoticeThread.terminate()
+        """安全终止所有监听器"""
+        try:
+            if hasattr(self.processListener, 'stop'):
+                self.processListener.stop()
+            else:
+                self.processListener.terminate()
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self.checkUpdateThread, 'stop'):
+                self.checkUpdateThread.stop()
+            else:
+                self.checkUpdateThread.terminate()
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self.checkNoticeThread, 'stop'):
+                self.checkNoticeThread.stop()
+            else:
+                self.checkNoticeThread.terminate()
+        except Exception:
+            pass
 
     @asyncClose
     async def closeEvent(self, a0) -> None:
+        # 检查是否是系统关闭触发的
+        is_system_shutdown = False
+        try:
+            if os.name == 'nt':
+                import win32api
+                import win32con
+                # 尝试检测系统关闭
+                pass
+        except:
+            is_system_shutdown = True
+
         # 首次点击 关闭 按钮
-        if cfg.get(cfg.enableCloseToTray) is None:
-            msgBox = MessageBox(
-                self.tr("Do you wish to exit?"),
-                self.tr(
-                    "Choose action for close button (you can modify it at any time in the settings page)"),
-                self
-            )
+        if not is_system_shutdown and cfg.get(cfg.enableCloseToTray) is None:
+            try:
+                msgBox = MessageBox(
+                    self.tr("Do you wish to exit?"),
+                    self.tr(
+                        "Choose action for close button (you can modify it at any time in the settings page)"),
+                    self
+                )
 
-            msgBox.yesButton.setText(self.tr('Minimize'))
-            msgBox.cancelButton.setText(self.tr('Exit'))
-            self.update()
+                msgBox.yesButton.setText(self.tr('Minimize'))
+                msgBox.cancelButton.setText(self.tr('Exit'))
+                self.update()
 
-            cfg.set(cfg.enableCloseToTray, msgBox.exec())
+                cfg.set(cfg.enableCloseToTray, msgBox.exec())
+            except:
+                # 如果显示对话框失败，直接退出
+                is_system_shutdown = True
 
-        if not cfg.get(cfg.enableCloseToTray) or self.isTrayExit:
-            self.__terminateListeners()
-            self.opggWindow.close()
+        if is_system_shutdown or not cfg.get(cfg.enableCloseToTray) or self.isTrayExit:
+            # 系统关闭时的快速退出流程
+            try:
+                self.__terminateListeners()
+            except:
+                pass
 
-            cfg.set(cfg.windowSize, self.windowSize)
+            try:
+                self.opggWindow.close()
+            except:
+                pass
 
-            return super().closeEvent(a0)
+            # 只在非系统关闭时保存配置
+            if not is_system_shutdown:
+                try:
+                    cfg.set(cfg.windowSize, self.windowSize)
+                except:
+                    pass
+
+            try:
+                return super().closeEvent(a0)
+            except:
+                try:
+                    os._exit(0)
+                except:
+                    pass
         else:
             a0.ignore()
             self.hide()
@@ -1023,6 +1078,32 @@ class MainWindow(FluentWindow):
             await connector.playAgain()
 
     def exceptHook(self, ty, value, tb):
+        # 检查是否是系统关闭相关的异常
+        is_system_shutdown = False
+        try:
+            if ty in [KeyboardInterrupt, SystemExit]:
+                is_system_shutdown = True
+            # 检查异常消息是否暗示系统关闭
+            exc_str = str(value).lower() if value else ''
+            shutdown_keywords = ['shutting', 'closing', 'exit', 'terminate',
+                               'abort', 'service', 'resource', 'not available']
+            if any(kw in exc_str for kw in shutdown_keywords):
+                is_system_shutdown = True
+        except:
+            pass
+
+        if is_system_shutdown:
+            # 系统正在关闭，静默退出
+            try:
+                self.__terminateListeners()
+            except:
+                pass
+            try:
+                os._exit(0)
+            except:
+                pass
+            return
+
         tracebackFormat = traceback.format_exception(ty, value, tb)
         title = self.tr('Exception occurred 😥')
         content = "".join(tracebackFormat)
@@ -1032,26 +1113,50 @@ class MainWindow(FluentWindow):
 
         logger.error(f"Exception occurred:\n{content}", "Crash")
 
-        for call in connector.callStack:
-            logger.error(call, "Crash")
+        try:
+            for call in connector.callStack:
+                logger.error(call, "Crash")
 
-        logger.error(str(self.searchInterface), "Crash")
-        logger.error(str(self.gameInfoInterface), "Crash")
-        logger.error(str(self.careerInterface), "Crash")
-        logger.error(str(self.auxiliaryFuncInterface), "Crash")
-        logger.error(str(self.settingInterface), "Crash")
+            logger.error(str(self.searchInterface), "Crash")
+            logger.error(str(self.gameInfoInterface), "Crash")
+            logger.error(str(self.careerInterface), "Crash")
+            logger.error(str(self.auxiliaryFuncInterface), "Crash")
+            logger.error(str(self.settingInterface), "Crash")
+        except:
+            pass
 
         content = f"Seraphine ver.{BETA or VERSION}\n{'-'*5}\n{content}"
 
-        w = ExceptionMessageBox(title, content, self.window())
+        try:
+            w = ExceptionMessageBox(title, content, self.window())
 
-        if w.exec():
-            pyperclip.copy(content)
+            if w.exec():
+                pyperclip.copy(content)
+        except:
+            pass
 
-        self.oldHook(ty, value, tb)
-        signalBus.terminateListeners.emit()
-        logger.error("Abnormal exit", "Crash")
-        sys.exit()
+        try:
+            self.oldHook(ty, value, tb)
+        except:
+            pass
+
+        try:
+            signalBus.terminateListeners.emit()
+        except:
+            pass
+
+        try:
+            logger.error("Abnormal exit", "Crash")
+        except:
+            pass
+
+        try:
+            sys.exit()
+        except:
+            try:
+                os._exit(1)
+            except:
+                pass
 
     def __onCurrentStackedChanged(self, index):
         widget: SmoothScrollArea = self.stackedWidget.view.currentWidget()
