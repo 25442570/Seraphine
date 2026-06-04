@@ -112,7 +112,7 @@ class UpdateMessageBox(MessageBoxBase):
         # 把下载地址换成 Gitee 的
         url: str = self.info['assets'][0]['browser_download_url']
         url = url.replace("github", "gitee")
-        url = url.replace("Zzaphkiel/Seraphine", "Zzaphkiel/seraphine")
+        url = url.replace("25442570/Seraphine", "25442570/seraphine")
 
         self.myYesButton.setEnabled(False)
         self.myCancelButton.setEnabled(False)
@@ -167,7 +167,7 @@ class UpdateMessageBox(MessageBoxBase):
     def __onManuallyButtonClicked(self):
         url: str = self.info['assets'][0]['browser_download_url']
         url = url.replace("github", "gitee")
-        url = url.replace("Zzaphkiel/Seraphine", "Zzaphkiel/seraphine")
+        url = url.replace("25442570/Seraphine", "25442570/seraphine")
 
         webbrowser.open(url)
 

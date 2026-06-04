@@ -7,11 +7,7 @@
 </p>
 
 <div align="center">
-
-  [![License](https://img.shields.io/github/license/Zzaphkiel/Seraphine?style=flat&label=License)](https://github.com/Zzaphkiel/Seraphine/blob/main/LICENSE)
-  [![Forks](https://img.shields.io/github/forks/Zzaphkiel/Seraphine?style=flat&label=Forks)](https://github.com/Zzaphkiel/Seraphine/forks)
-  [![Stars](https://img.shields.io/github/stars/Zzaphkiel/Seraphine?style=flat&label=Stars)](https://github.com/Zzaphkiel/Seraphine/stargazers)
-  [![Downloads](https://img.shields.io/github/downloads/Zzaphkiel/Seraphine/total?style=flat&label=Downloads)](https://github.com/Zzaphkiel/Seraphine/releases)
+  [![Downloads](https://img.shields.io/github/downloads/25442570/Seraphine/total?style=flat&label=Downloads)](https://github.com/25442570/Seraphine/releases)
 
 </div>
 
