@@ -111,7 +111,6 @@ class UpdateMessageBox(MessageBoxBase):
 
         # 把下载地址换成 Gitee 的
         url: str = self.info['assets'][0]['browser_download_url']
-        url = url.replace("github", "gitee")
         url = url.replace("25442570/Seraphine", "25442570/seraphine")
 
         self.myYesButton.setEnabled(False)
@@ -131,8 +130,15 @@ class UpdateMessageBox(MessageBoxBase):
 
         async with aiohttp.ClientSession() as sess:
             resp = await sess.get(url)
-            length = int(resp.headers['content-length'])
-            self.bar.setMaximum(length)
+            length = resp.content_length  # 使用 aiohttp 提供的属性，可能为 None
+
+            if length is None:
+                # 无法获取内容长度，使用不确定进度条
+                self.bar.setMaximum(0)
+                self.infoLabel.setText(self.tr("Downloading..."))
+            else:
+                self.bar.setMaximum(length)
+
             cur = 0
 
             with open(zipPath, 'wb') as f:
@@ -140,9 +146,13 @@ class UpdateMessageBox(MessageBoxBase):
                     f.write(chunk)
 
                     cur += len(chunk)
-                    self.bar.setValue(cur)
-                    self.infoLabel.setText(
-                        f"{cur / (1024*1024):.2f} MB / {length / (1024*1024):.2f} MB ({cur * 100 / length:.2f}%)")
+                    if length is not None:
+                        self.bar.setValue(cur)
+                        self.infoLabel.setText(
+                            f"{cur / (1024*1024):.2f} MB / {length / (1024*1024):.2f} MB ({cur * 100 / length:.2f}%)")
+                    else:
+                        # 不确定进度模式，只显示已下载大小
+                        self.infoLabel.setText(f"{cur / (1024*1024):.2f} MB downloaded")
 
         self.infoLabel.setText(
             self.tr("Downloading finished, decompressing..."))
