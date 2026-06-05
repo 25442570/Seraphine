@@ -8,8 +8,9 @@ import pyperclip
 from qasync import asyncSlot
 import asyncio
 from PyQt5.QtWidgets import (QVBoxLayout, QHBoxLayout, QFrame,
-                             QSpacerItem, QSizePolicy, QLabel, QStackedWidget, QWidget)
-from PyQt5.QtCore import Qt, pyqtSignal
+                             QSpacerItem, QSizePolicy, QLabel, 
+                             QStackedWidget, QWidget)
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer  
 from PyQt5.QtGui import QPixmap, QColor
 
 from ..common.logger import logger
@@ -84,11 +85,16 @@ class GamesTab(QFrame):
         self.currentTabSelected = None
 
         # 所有的对局记录
-        self.games = LifoQueue()  # LifoQueue 保证线程安全 -- By Hpero4
+        self.games = []  # 改回 list，因为要随机访问
 
         # queueId 到对应 self.games 下标数组的映射
-        # OrderedDict 保证线程安全 -- By Hpero4
         self.queueIdMap = OrderedDict({-1: []})
+
+        # 记录已添加的游戏 ID，避免重复
+        self.added_game_ids = set()
+
+        # 保护 games 和 queueIdMap 的锁
+        self.lock = threading.Lock()
 
         self.__initWidget()
         self.__initLayout()
@@ -122,19 +128,27 @@ class GamesTab(QFrame):
         self.nextButton.clicked.connect(self.__onNextButtonClicked)
 
     def updateQueueIdMap(self, games):
-        for game in games:
-            index = len(self.games)
-            self.games.append(game)
-            queueId = game['queueId']
+        with self.lock:
+            for game in games:
+                # 检查游戏是否已添加，避免重复
+                game_id = game.get('gameId')
+                if game_id is not None and game_id in self.added_game_ids:
+                    continue
+                if game_id is not None:
+                    self.added_game_ids.add(game_id)
 
-            l: list = self.queueIdMap.get(queueId)
+                index = len(self.games)
+                self.games.append(game)
+                queueId = game['queueId']
 
-            if not l:
-                self.queueIdMap[queueId] = [index]
-            else:
-                l.append(index)
+                l: list = self.queueIdMap.get(queueId)
 
-            self.queueIdMap[-1].append(index)
+                if not l:
+                    self.queueIdMap[queueId] = [index]
+                else:
+                    l.append(index)
+
+                self.queueIdMap[-1].append(index)
 
     @asyncSlot()
     async def __onPrevButtonClicked(self):
@@ -174,8 +188,11 @@ class GamesTab(QFrame):
         prevEnable = not self.currentPageNum in [0, 1]
         self.prevButton.setEnabled(prevEnable)
 
-        nextEnable = len(
-            self.queueIdMap.get(self.queueId, [])) > self.currentPageNum * 10
+        with self.lock:
+            length = len(self.queueIdMap.get(self.queueId, []))
+            nextEnable = length > self.currentPageNum * 10
+
+        logger.critical(f"resetButtonEnabled: length={length}, currentPageNum={self.currentPageNum}, nextEnable={nextEnable}", TAG)
         self.nextButton.setEnabled(nextEnable)
 
     def prepareNextPage(self):
@@ -186,8 +203,10 @@ class GamesTab(QFrame):
         调用该函数，绘制下一页，加入 stackedWidget
         '''
 
-        # 游戏数据在 self.games 数组中对应的下标
-        indices = self.queueIdMap[self.queueId]
+        with self.lock:
+            # 游戏数据在 self.games 数组中对应的下标
+            indices = list(self.queueIdMap.get(self.queueId, []))  # 创建副本，避免在绘制过程中被修改
+            games_copy = list(self.games)  # 创建副本
 
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -199,7 +218,7 @@ class GamesTab(QFrame):
         end = min(10 + begin, len(indices))
 
         for i in range(begin, end):
-            tab = GameTab(self.games[indices[i]])
+            tab = GameTab(games_copy[indices[i]])
             waiting = self.waitingForSelect
 
             if waiting and tab.gameId == int(self.waitingForSelect):
@@ -234,16 +253,18 @@ class GamesTab(QFrame):
         self.stackWidget.setCurrentIndex(0)
 
     def clear(self):
-        self.pageLabel.setText(" ")
+        with self.lock:
+            self.pageLabel.setText(" ")
 
-        self.prevButton.setVisible(False)
-        self.nextButton.setVisible(False)
+            self.prevButton.setVisible(False)
+            self.nextButton.setVisible(False)
 
-        self.queueId = -1
-        self.games = []
-        self.queueIdMap = {-1: []}
+            self.queueId = -1
+            self.games = []
+            self.queueIdMap = {-1: []}
+            self.added_game_ids = set()
 
-        self.clearTabs()
+            self.clearTabs()
 
     def clickFirstTab(self):
         widget = self.stackWidget.widget(1)
@@ -1140,6 +1161,8 @@ class SearchInterface(SeraphineInterface):
         self.__initWidget()
         self.__initLayout()
         self.__connectSignalToSlot()
+        self.load_games_lock = asyncio.Lock() 
+        self.detail_view_load_lock = asyncio.Lock()
 
     def __initWidget(self):
         self.searchLineEdit.setAlignment(Qt.AlignCenter)
@@ -1229,14 +1252,20 @@ class SearchInterface(SeraphineInterface):
 
         self.gamesView.gameDetailView.clear()
 
+        should_start_task = False
         # NOTE 如果是生涯和搜索反复横跳, 就不重新启 loadgames 任务了
         if puuid != self.puuid:
             if self.gameLoadingTask:
                 self.gameLoadingTask.cancel()
 
-                while not self.gameLoadingTask.cancelled() \
-                        and not self.gameLoadingTask.done():
-                    await asyncio.sleep(.3)
+                # 等待任务完全结束
+                while not self.gameLoadingTask.done():
+                    try:
+                        await self.gameLoadingTask
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        pass
 
             self.puuid = summoner['puuid']
             self.gamesView.gamesTab.clear()
@@ -1258,18 +1287,19 @@ class SearchInterface(SeraphineInterface):
 
             self.gamesView.gamesTab.updateQueueIdMap(games)
 
-            # 启动任务，往 gamesTab 里丢数据
-            # NOTE 既然创建新任务, 并且刷新了self.puuid 就应该用self的, 否则就违背了loadGames判断的初衷
-
-            self.gameLoadingTask = asyncio.create_task(
-                self.__loadGames(self.puuid))
+            # 标记需要启动任务
+            should_start_task = True
 
         self.gamesView.gamesTab.showTheFirstPage()
         self.gamesView.setLoadingPageEnable(False)
 
         self.__addSearchHistroy(name)
 
-        return True
+        return should_start_task
+
+    def _startLoadGamesTask(self):
+        """安全地启动游戏加载任务，避免 qasync 任务嵌套问题"""
+        self.gameLoadingTask = asyncio.create_task(self.__loadGames(self.puuid))
 
     def waitingForDrawSelect(self, gameId):
         '''
@@ -1306,11 +1336,17 @@ class SearchInterface(SeraphineInterface):
 
     @asyncSlot()
     async def onSearchButtonClicked(self):
-        if not await self.searchAndShowFirstPage():
+        should_start_task = await self.searchAndShowFirstPage()
+        if should_start_task is False:  # None 表示不需要启动新任务但成功了
             return
 
         self.filterComboBox.setCurrentIndex(0)  # 将筛选条件回调至"全部" -- By Hpero4
         self.gamesView.gamesTab.clickFirstTab()
+
+        # 在当前异步槽完成后，再启动加载任务
+        # 这样可以避免 qasync 的任务嵌套问题
+        if should_start_task is True:
+            QTimer.singleShot(0, self._startLoadGamesTask)
 
     async def __loadGames(self, puuid):
         begIdx = 20
@@ -1318,64 +1354,64 @@ class SearchInterface(SeraphineInterface):
 
         logger.debug(f"welcome load games task: {puuid}", TAG)
 
-        # NOTE 换了查询目标, 若之前正在查, 先等 task 被 release 掉 -- By Hpero4
-        while self.gameLoadingTask \
-                and not self.gameLoadingTask.done() \
-                and puuid != self.puuid:
-            await asyncio.sleep(.2)
+        # 等待旧任务释放锁
+        if self.gameLoadingTask and not self.gameLoadingTask.done() and puuid != self.puuid:
+            await self.load_games_lock.acquire() # 等待旧任务 release
+            self.load_games_lock.release() # 立即释放，因为我们只是想等它结束
 
         logger.debug(f"start load {puuid}", TAG)
-        # 连续查多个人时, 将前面正在查的task给release掉
-        while self.puuid == puuid:
-            # 为加载战绩详情让行
-            while (
-                (self.detailViewLoadTask and not self.detailViewLoadTask.done())
-                or
-                (self.window().careerInterface.loadGamesTask and not self.window(
-                ).careerInterface.loadGamesTask.done())
-            ):
-                await asyncio.sleep(.2)
 
-            t1 = time.time()
-            try:
-                games = await connector.getSummonerGamesByPuuidSlowly(
-                    puuid, begIdx, endIdx)
-            except SummonerGamesNotFound:
-                # TODO 这里可以弹个窗  -- By Zzaphkiel
-                # NOTE 触发 SummonerGamesNotFound 时, 异常信息会通过 connector 下发到 main_window 的 __onShowLcuConnectError
-                #  理论上会有弹框提示  -- By Hpero4
-                return
-            t2 = time.time()
+        try:
+            while self.puuid == puuid:
+                # 检查是否应该停止
+                if self.puuid != puuid:
+                    return
 
-            logger.debug(
-                f"load games {self.puuid} [{begIdx}-{endIdx}] finish {t2-t1}s", TAG)
-            # 1000 局搜完了，或者正好上一次就是最后
-            # 在切换了puuid时, 就不要再把数据刷到Games上了 -- By Hpero4
-            if games['gameCount'] == 0 or self.puuid != puuid:
-                return
+                # 等待详情页锁
+                if (self.detailViewLoadTask and not self.detailViewLoadTask.done()) or \
+                   (self.window().careerInterface.loadGamesTask and not self.window().careerInterface.loadGamesTask.done()):
 
-            # 处理数据，交给 gamesTab，更新其 games 成员以及 queueIdMap
-            games = await parseGamesDataConcurrently(games['games'])
+                    # 尝试获取锁，如果被占用就会挂起等待
+                    await self.detail_view_load_lock.acquire()
+                    # 获取到了说明详情页加载完了，我们暂时占有它
+                    self.detail_view_load_lock.release() # 立即释放
 
-            if self.puuid != puuid:
-                return
+                # 再次检查是否应该停止
+                if self.puuid != puuid:
+                    return
 
-            self.gamesView.gamesTab.updateQueueIdMap(games)
+                # --- 开始加载数据 ---
+                t1 = time.time()
+                try:
+                    games = await connector.getSummonerGamesByPuuidSlowly(puuid, begIdx, endIdx)
+                except SummonerGamesNotFound:
+                    return
+                t2 = time.time()
 
-            # 如果用户下一页点得太猛，在还没加载完的时候点到了能绘制的最后一页
-            # 由于 __onNextButtonClicked 的逻辑，在用户进入最后一页时，nextButton 会被设置为不可用。
-            # 而现在，由于新的两页对局数据加载好了，可以绘制上去了，要让 button 变得可用
-            self.gamesView.gamesTab.resetButtonEnabled()
+                logger.debug(f"load games {self.puuid} [{begIdx}-{endIdx}] finish {t2-t1}s", TAG)
 
-            # 如果长度小于 10，也说明搜完了已经
-            if len(games) < 10:
-                return
+                if games['gameCount'] == 0 or self.puuid != puuid:
+                    return
 
-            begIdx = endIdx + 1
-            endIdx = begIdx + 9
+                games = await parseGamesDataConcurrently(games['games'])
+                if self.puuid != puuid:
+                    return
 
-            # 睡不睡都行
-            await asyncio.sleep(.1)
+                self.gamesView.gamesTab.updateQueueIdMap(games)
+                # 移除了 processEvents()
+
+                if len(games) < 10 or self.puuid != puuid:
+                    return
+
+                begIdx = endIdx + 1
+                endIdx = begIdx + 9
+
+                await asyncio.sleep(.1)
+
+        finally:
+            # 确保锁被释放
+            if self.load_games_lock.locked():
+                self.load_games_lock.release()
 
     @asyncSlot(QWidget)
     async def __onGameTabClicked(self, tab: GameTab):
@@ -1399,25 +1435,20 @@ class SearchInterface(SeraphineInterface):
         await self.updateGameDetailView(tab.gameId, self.puuid)
 
     async def updateGameDetailView(self, gameId, puuid):
-        # if cfg.get(cfg.showTierInGameInfo):
-        if True:
-            self.gamesView.gameDetailView.setLoadingPageEnabled(True)
+        # 使用锁来标记占用
+        async with self.detail_view_load_lock: 
+            try:
+                self.gamesView.gameDetailView.setLoadingPageEnabled(True)
+                self.detailViewLoadTask = asyncio.create_task(connector.getGameDetailByGameId(gameId))
+                game = await self.detailViewLoadTask
 
-        # NOTE self.detailViewLoadTask 用于标记详情正在加载, self.loadGame会为其让行 -- By Hpero4
-        self.detailViewLoadTask = asyncio.create_task(
-            connector.getGameDetailByGameId(gameId))
-        game = await self.detailViewLoadTask
+                if puuid == self.puuid:
+                    self.detailViewLoadTask = asyncio.create_task(parseGameDetailData(puuid, game))
+                    game = await self.detailViewLoadTask
+                    self.gamesView.gameDetailView.updateGame(game)
 
-        # 加载GameDetail的过程中, 切换了搜索对象(self.puuid变更), 将后续任务pass -- By Hpero4
-        if puuid == self.puuid:
-            self.detailViewLoadTask = asyncio.create_task(
-                parseGameDetailData(puuid, game))
-            game = await self.detailViewLoadTask
-            self.gamesView.gameDetailView.updateGame(game)
-
-        # if cfg.get(cfg.showTierInGameInfo):
-        if True:
-            self.gamesView.gameDetailView.setLoadingPageEnabled(False)
+            finally:
+                self.gamesView.gameDetailView.setLoadingPageEnabled(False)
 
     @asyncSlot(int)
     async def __onFilterComboxChanged(self, index):
