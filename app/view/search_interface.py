@@ -192,7 +192,6 @@ class GamesTab(QFrame):
             length = len(self.queueIdMap.get(self.queueId, []))
             nextEnable = length > self.currentPageNum * 10
 
-        logger.critical(f"resetButtonEnabled: length={length}, currentPageNum={self.currentPageNum}, nextEnable={nextEnable}", TAG)
         self.nextButton.setEnabled(nextEnable)
 
     def prepareNextPage(self):
@@ -1345,8 +1344,9 @@ class SearchInterface(SeraphineInterface):
 
         # 在当前异步槽完成后，再启动加载任务
         # 这样可以避免 qasync 的任务嵌套问题
-        if should_start_task is True:
-            QTimer.singleShot(0, self._startLoadGamesTask)
+        # API只返回前20局，不需要后台持续加载
+        # if should_start_task is True:
+        #     QTimer.singleShot(0, self._startLoadGamesTask)
 
     async def __loadGames(self, puuid):
         begIdx = 20
